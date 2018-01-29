@@ -200,10 +200,10 @@
 
 				float3 origin = float3(0, EarthRadius, 0) + _CameraHeight;
 				//float3 origin = _WorldSpaceCameraPos.xyz + EarthRadius + 1000;
-				float3 rayDir = normalize(mul(UNITY_MATRIX_M, input.vertex));
+				float3 rayDir = normalize(input.worldPos);
 				//float3 rayDir = normalize(input.worldPos * AtmosphereRadius - origin.xyz);
 				float x0, x1, xMax = kInf;
-				if (raySphereIntersect(origin, rayDir, EarthRadius, x0, x1) && x1 > 0)
+				if (!raySphereIntersect(origin, rayDir, EarthRadius, x0, x1) && x1 > 0)
 				{
 					// 衝突したら近い点を衝突点とする
 					xMax = max(0, x0);

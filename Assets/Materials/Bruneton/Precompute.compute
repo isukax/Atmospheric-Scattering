@@ -1,0 +1,46 @@
+﻿#pragma kernel Transmittance
+#pragma kernel SingleScattering
+#define COMPUTE_SHADER
+
+#include "Functions.cginc"
+
+RWTexture2D<float4> TransmittanceTex;
+TransmittanceTexture TransmittanceTexRead;
+RWTexture3D<float4> ScatteringTex;
+
+[numthreads(8,8,1)]
+void Transmittance (uint3 id : SV_DispatchThreadID)
+{
+    float2 uv = id.xy + float2(0.5,0.5);
+	AtmosphereParameters atmosphere = InitAtmosphereParameters();
+	float3 transmittance = ComputeTransmittanceToTopAtmosphereBoundaryTexture(atmosphere, uv);
+	TransmittanceTex[id.xy] = float4(transmittance, 1.0);
+}
+
+ //   layout(location = 0) out vec3 delta_rayleigh;
+//    layout(location = 1) out vec3 delta_mie;
+ //   layout(location = 2) out vec4 scattering;
+ //   layout(location = 3) out vec3 single_mie_scattering;
+//    uniform mat3 luminance_from_radiance;
+//    uniform sampler2D transmittance_texture;
+
+
+[numthreads(8,8,8)]
+void SingleScattering (uint3 id : SV_DispatchThreadID)
+{
+    float3 uvw = id.xyz + float3(0.5,0.5, 0.5);
+	AtmosphereParameters atmosphere = InitAtmosphereParameters();
+	float3 delta_rayleigh;
+	float3 delta_mie;
+	float3x3 luminance_from_radiance = float3x3(
+		1, 0, 0,
+		0, 1, 0,
+		0, 0, 1
+	);
+	ComputeSingleScatteringTexture(atmosphere, TransmittanceTexRead, uvw, delta_rayleigh, delta_mie);
+    //float4 scattering = float4(mul(luminance_from_radiance, delta_rayleigh.rgb), mul(luminance_from_radiance, delta_mie).r);
+    float4 scattering = float4(delta_rayleigh.rgb, delta_mie.r);
+    float3 single_mie_scattering = mul(luminance_from_radiance, delta_mie);
+
+	ScatteringTex[id.xyz] = scattering;
+}

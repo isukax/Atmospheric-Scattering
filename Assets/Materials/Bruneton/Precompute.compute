@@ -1,12 +1,37 @@
-﻿#pragma kernel Transmittance
+﻿#define COMPUTE_SHADER
+
+#pragma kernel Transmittance
+#pragma kernel DirectIrradiance
 #pragma kernel SingleScattering
-#define COMPUTE_SHADER
+#pragma kernel ScatteringDensity
+#pragma kernel IndirectIrradiance
+#pragma kernel MultipleScattering
 
 #include "Functions.cginc"
 
 RWTexture2D<float4> TransmittanceTex;
-TransmittanceTexture TransmittanceTexRead;
+RWTexture2D<float4> IrradianceTex;
+RWTexture2D<float4> DeltaIrradianceTex;
 RWTexture3D<float4> ScatteringTex;
+RWTexture3D<float4> SingleRayleighScatteringTex;
+RWTexture3D<float4> SingleMieScatteringTex;
+RWTexture3D<float4> ScatteringDensityTex;
+RWTexture3D<float4> MultipleScatteringTex;
+RWTexture3D<float4> DeltaMultipleScatteringTex;
+
+TransmittanceTexture TransmittanceTexRead;
+IrradianceTexture DeltaIrradianceTextureRead;
+IrradianceTexture IrradianceTextureRead;
+ScatteringTexture ScatteringTextureRead;
+ScatteringTexture SingleRayleighScatteringTextureRead;
+ScatteringTexture SingleMieScatteringTextureRead;
+ScatteringDensityTexture ScatteringDensityTextureRead;
+ScatteringTexture MultipleScatteringTextureRead;
+ScatteringTexture DeltaMultipleScatteringTextureRead;
+
+
+int scattering_order;
+int blend;
 
 [numthreads(8,8,1)]
 void Transmittance (uint3 id : SV_DispatchThreadID)
@@ -17,13 +42,16 @@ void Transmittance (uint3 id : SV_DispatchThreadID)
 	TransmittanceTex[id.xy] = float4(transmittance, 1.0);
 }
 
- //   layout(location = 0) out vec3 delta_rayleigh;
-//    layout(location = 1) out vec3 delta_mie;
- //   layout(location = 2) out vec4 scattering;
- //   layout(location = 3) out vec3 single_mie_scattering;
-//    uniform mat3 luminance_from_radiance;
-//    uniform sampler2D transmittance_texture;
+[numthreads(8,8,1)]
+void DirectIrradiance (uint3 id : SV_DispatchThreadID)
+{
+    float2 uv = id.xy + float2(0.5,0.5);
+	AtmosphereParameters atmosphere = InitAtmosphereParameters();
+	DeltaIrradianceTex[id.xy] = float4(ComputeDirectIrradianceTexture(atmosphere, TransmittanceTexRead, uv), 1.0);
+	IrradianceTex[id.xy] = 0;
 
+	// if(blend[1]==1) IrradianceTex[id.xy] += IrradianceTextureRead[id.xy];
+}
 
 [numthreads(8,8,8)]
 void SingleScattering (uint3 id : SV_DispatchThreadID)
@@ -38,9 +66,67 @@ void SingleScattering (uint3 id : SV_DispatchThreadID)
 		0, 0, 1
 	);
 	ComputeSingleScatteringTexture(atmosphere, TransmittanceTexRead, uvw, delta_rayleigh, delta_mie);
-    //float4 scattering = float4(mul(luminance_from_radiance, delta_rayleigh.rgb), mul(luminance_from_radiance, delta_mie).r);
-    float4 scattering = float4(delta_rayleigh.rgb, delta_mie.r);
+   
+    float4 scattering = float4(mul(luminance_from_radiance, delta_rayleigh.rgb), mul(luminance_from_radiance, delta_mie).r);
     float3 single_mie_scattering = mul(luminance_from_radiance, delta_mie);
 
+	SingleRayleighScatteringTex[id.xyz] = float4(delta_rayleigh, 1.0);
+	SingleMieScatteringTex[id.xyz] = float4(delta_mie, 1.0);
+
 	ScatteringTex[id.xyz] = scattering;
+}
+
+[numthreads(8,8,8)]
+void ScatteringDensity (uint3 id : SV_DispatchThreadID)
+{
+    float3 uvw = id.xyz + float3(0.5,0.5, 0.5);
+	AtmosphereParameters atmosphere = InitAtmosphereParameters();
+    float3 scattering_density = ComputeScatteringDensityTexture(
+          atmosphere, TransmittanceTexRead, SingleRayleighScatteringTextureRead,
+          SingleMieScatteringTextureRead, DeltaMultipleScatteringTextureRead,
+          DeltaIrradianceTextureRead, uvw,
+          scattering_order);
+
+	ScatteringDensityTex[id.xyz] = float4(scattering_density, 1.0);
+}
+
+[numthreads(8,8,1)]
+void IndirectIrradiance (uint3 id : SV_DispatchThreadID)
+{
+    float2 uv = id.xy + float2(0.5,0.5);
+	AtmosphereParameters atmosphere = InitAtmosphereParameters();
+	float3 delta = ComputeIndirectIrradianceTexture(
+		atmosphere, SingleRayleighScatteringTextureRead,
+        SingleMieScatteringTextureRead, DeltaMultipleScatteringTextureRead,
+        uv, scattering_order);
+
+	float3x3 luminance_from_radiance = float3x3(
+		1, 0, 0,
+		0, 1, 0,
+		0, 0, 1
+	);
+	DeltaIrradianceTex[id.xy] = float4(delta, 1);
+
+	float3 irradiance = mul(luminance_from_radiance, delta);
+    IrradianceTex[id.xy] = float4(irradiance, 1);
+
+    if(blend == 1) IrradianceTex[id.xy] += IrradianceTextureRead[id.xy];
+}
+
+[numthreads(8,8,8)]
+void MultipleScattering (uint3 id : SV_DispatchThreadID)
+{
+    float3 uvw = id.xyz + float3(0.5,0.5, 0.5);
+	AtmosphereParameters atmosphere = InitAtmosphereParameters();
+		float3x3 luminance_from_radiance = float3x3(
+		1, 0, 0,
+		0, 1, 0,
+		0, 0, 1
+	);
+	float nu;
+	float3 delta_multiple_scattering = ComputeMultipleScatteringTexture(atmosphere, TransmittanceTexRead, ScatteringDensityTextureRead, uvw, nu);
+    DeltaMultipleScatteringTex[id.xyz] = float4(delta_multiple_scattering, 1.0);
+    MultipleScatteringTex[id.xyz] = float4(mul(luminance_from_radiance, delta_multiple_scattering) / RayleighPhaseFunction(nu), 1.0);
+   
+    if(blend == 1) MultipleScatteringTex[id.xyz] += ScatteringTextureRead[id];
 }

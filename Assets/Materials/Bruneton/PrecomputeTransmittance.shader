@@ -29,7 +29,14 @@
 	float _MiePhaseG;
 	
 	sampler2D _TransmittanceTex;
+	sampler2D _DeltaIrradianceTex;
+	sampler2D _IrradianceTex;
 	sampler3D _ScatteringTex;
+	sampler3D _SingleRayleighScatteringTex;
+	sampler3D _SingleMieScatteringTex;
+	sampler3D _ScatteringDensityTex;
+	sampler3D _MultipleScatteringTex;
+	sampler3D _DeltaMultipleScatteringTex;
 	float _DepthTest;
 
 	struct appdata
@@ -252,8 +259,16 @@
 	fixed4 frag(v2f i) : SV_Target
 	{
 		//return tex2D(_TransmittanceTex, i.uv);
+		return tex2D(_IrradianceTex, i.uv);
+		//return tex2D(_DeltaIrradianceTex, i.uv);
+		//return tex3D(_ScatteringDensityTex, float3(i.uv, _DepthTest));
+		//return tex3D(_SingleRayleighScatteringTex, float3(i.uv, _DepthTest));
+		//return tex3D(_SingleMieScatteringTex, float3(i.uv, _DepthTest));
+		
 		return tex3D(_ScatteringTex, float3(i.uv, _DepthTest));
-
+		return tex3D(_MultipleScatteringTex, float3(i.uv, _DepthTest));
+		return tex3D(_DeltaMultipleScatteringTex, float3(i.uv, _DepthTest));
+	
 		//return float4(i.uv, 0, 1);
 		AtmosphereParameters atmosphere = InitAtmosphereParameters();
 		float3 transmittance = ComputeTransmittanceToTopAtmosphereBoundaryTexture(atmosphere, i.uv);

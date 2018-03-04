@@ -1,8 +1,9 @@
-﻿Shader "Custom/SkyboxScratch" 
+﻿Shader "Custom/SkyboxBluneton" 
 {
 	Properties
 	{
 		[Toggle(IS_TONEMAP)]_IsToneMap("enable Tonemap", Int) = 0
+		_ToneMapExposure("ToneMap Exposure", Range(0, 40)) = 1.3
 		[KeywordEnum(Default, Rayleigh, Mie)] _ScatterMode("Scatter Mode", Int) = 0
 		_Exposure("Exposure", Range(0, 40)) = 1.3
 		_AtmosphereThickness("Atmosphere Thickness", Range(0,5)) = 1.0
@@ -29,7 +30,8 @@
 			#pragma fragment frag
 
 			#include "UnityCG.cginc"
-			#include "Lighting.cginc"
+#include "Lighting.cginc"
+#include "Functions.cginc"
 
 			#pragma multi_compile _SCATTERMODE_DEFAULT _SCATTERMODE_RAYLEIGH _SCATTERMODE_MIE
 
@@ -46,6 +48,13 @@
 			#define SCATTER_MODE SCATTER_MODE_DEFAULT
 			#endif
 			#endif
+
+			sampler2D _TransmittanceTex;
+			sampler3D _ScatteringTex;
+			sampler3D _MieScatteringTex;
+			float _ToneMapExposure;
+			matrix _InverseProjection;
+			matrix _InverseView;
 
 			const static float M_PI = 3.141592653;
 			const static float kInf = 10e6;
@@ -193,33 +202,94 @@
 				return (sumR * betaR * phaseR + sumM * betaM * phaseM) * _Exposure;
 			}
 
+			// Uncharted 2 tonemap from http://filmicgames.com/archives/75
+			inline float3 FilmicTonemap(float3 x)
+			{
+				// Consts need to be defined locally due to Unity bug
+				// global consts result in black screen for some reason
+
+				const float A = 0.15;
+				const float B = 0.50;
+				const float C = 0.10;
+				const float D = 0.20;
+				const float E = 0.02;
+				const float F = 0.30;
+
+				return ((x*(A*x + C*B) + D*E) / (x*(A*x + B) + D*F)) - E / F;
+			}
+
+			float3 ApplyToneMap(float3 color)
+			{
+				const float W = 11.2;
+				color *= _ToneMapExposure;
+				float ExposureBias = 2.0f;
+				float3 curr = FilmicTonemap(ExposureBias * color);
+				float3 whiteScale = 1.0f / FilmicTonemap(W);
+				color = curr * whiteScale;
+				return color;
+			}
+
+			inline float3 UVToCameraRay(float2 uv)
+			{
+				float4 cameraRay = float4(uv * 2.0 - 1.0, 1.0, 1.0);
+				cameraRay = mul(_InverseProjection, cameraRay);
+				cameraRay = cameraRay / cameraRay.w;
+
+				//return mul(_InverseView, cameraRay.xyz);
+				return mul((float3x3)_InverseView, cameraRay.xyz);
+			}
+
 			float4 frag(VSOutput input) : SV_Target0
 			{
+				//return tex2D(_TransmittanceTex, input.uv);
+				//return tex3D(_ScatteringTex, float3(input.uv, 0));
+				AtmosphereParameters atmosphere = InitAtmosphereParameters();
+			//float3 V = normalize(UVToCameraRay(input.uv));
+			float3 V = normalize(input.worldPos);
+				float3 L = normalize(_WorldSpaceLightPos0.xyz);
+				float earthRadius = 6360;
+				float atmosphereRadius = 6420;
+				float altitude = earthRadius + _CameraHeight.y;
+				float3 origin = float3(0, earthRadius, 0) + _CameraHeight;
+				float x0, x1 = kInf;
+				float y0, y1 = kInf;
+				bool isIntersectGround = raySphereIntersect(origin, V, earthRadius, x0, x1);
+				bool isIntersectAtmosphere = raySphereIntersect(origin, V, atmosphereRadius, y0, y1);
 
-				float4 color = 0;
+				float mu = dot(V, float3(0, 1, 0));// / altitude * y1;
+				float mu_s = dot(L, float3(0, 1, 0));// / altitude;
+				float nu = dot(L, V);// / y1;
 
-				float3 origin = float3(0, EarthRadius, 0) + _CameraHeight;
-				//float3 origin = _WorldSpaceCameraPos.xyz + EarthRadius + 1000;
-				float3 rayDir = normalize(input.worldPos);
-				//float3 rayDir = normalize(input.worldPos * AtmosphereRadius - origin.xyz);
-				float x0, x1, xMax = kInf;
-				if (!raySphereIntersect(origin, rayDir, EarthRadius, x0, x1) && x1 > 0)
-				{
-					// 衝突したら近い点を衝突点とする
-					xMax = max(0, x0);
-					//return float4(1, 0, 0, 1);
-				}
+				float3 scattering = GetScattering(atmosphere, _ScatteringTex, _MieScatteringTex, _ScatteringTex, altitude, mu, mu_s, nu, isIntersectGround, 1);
+				float3 output = ApplyToneMap(scattering);
+				return float4(output * _Exposure, 1);
+				//float4 color = 0;
 
-				color.rgb += computeIncidentLight(origin, rayDir, 0, xMax);
+				//float3 origin = float3(0, EarthRadius, 0) + _CameraHeight;
+				////float3 origin = _WorldSpaceCameraPos.xyz + EarthRadius + 1000;
+				//float3 rayDir = normalize(input.worldPos);
+				////float3 rayDir = normalize(input.worldPos * AtmosphereRadius - origin.xyz);
 
-				if(_IsToneMap)
-				{
-					color.r = color.r < 1.413f ? pow(color.r * 0.38317f, 1.0f / 2.2f) : 1.0f - exp(-color.r);
-					color.g = color.g < 1.413f ? pow(color.g * 0.38317f, 1.0f / 2.2f) : 1.0f - exp(-color.g);
-					color.b = color.b < 1.413f ? pow(color.b * 0.38317f, 1.0f / 2.2f) : 1.0f - exp(-color.b);
-				}
-				color.a = 1;
-				return color;
+				//// TODO single scattering texture + mie_scattering textureで単一散乱実装
+
+				//float x0, x1, xMax = kInf;
+				//if (!raySphereIntersect(origin, rayDir, EarthRadius, x0, x1) && x1 > 0)
+				//{
+				//	// 衝突したら近い点を衝突点とする
+				//	xMax = max(0, x0);
+				//	//return float4(1, 0, 0, 1);
+				//}
+
+				//color.rgb += computeIncidentLight(origin, rayDir, 0, xMax);
+
+				//if(_IsToneMap)
+				//{
+				//	color.r = color.r < 1.413f ? pow(color.r * 0.38317f, 1.0f / 2.2f) : 1.0f - exp(-color.r);
+				//	color.g = color.g < 1.413f ? pow(color.g * 0.38317f, 1.0f / 2.2f) : 1.0f - exp(-color.g);
+				//	color.b = color.b < 1.413f ? pow(color.b * 0.38317f, 1.0f / 2.2f) : 1.0f - exp(-color.b);
+				//}
+				//color.a = 1;
+				//return color;
 
 //#if SCATTER_MODE == SCATTER_MODE_RAYLEIGH
 //				return 1;

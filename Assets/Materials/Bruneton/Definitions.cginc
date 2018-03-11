@@ -280,6 +280,29 @@ struct DensityProfile {
 	DensityProfileLayer layers[2];
 };
 
+Length rayleigh_width;
+Number rayleigh_exp_term;
+InverseLength rayleigh_exp_scale;
+InverseLength rayleigh_linear_term;
+Number rayleigh_constant_term;
+DensityProfile RayleighDensity()
+{
+	DensityProfileLayer layer;
+
+	layer.width = rayleigh_width;
+	layer.exp_term = rayleigh_exp_term;
+	layer.exp_scale = rayleigh_exp_scale;
+	layer.linear_term = rayleigh_linear_term;
+	layer.constant_term = rayleigh_constant_term;
+
+	DensityProfile profile;
+	profile.layers[0] = layer;
+	profile.layers[1] = layer;
+
+	return profile;
+}
+
+
 /*
 The atmosphere parameters are then defined by the following struct:
 */

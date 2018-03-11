@@ -1008,42 +1008,134 @@ IrradianceSpectrum GetSunAndSkyIrradiance(
 		max(dot(normal, sun_direction), 0.0);
 }
 
+
+Angle _SunAngularRadius;
+Length _TopRadius;
+Length _BottomRadius;
+Number _MiePhaseFunctionG;
+ScatteringSpectrum _GroundAlbedo;
+float4 _AbsorptionExtinction;
+//ScatteringSpectrum _AbsorptionExtinction;
+float _RayleighLayer0[5];
+uniform float _RayleighLayer1[5];
+float rayleigh0_width;
+float rayleigh0_exp_term;
+float rayleigh0_exp_scale;
+float rayleigh0_linear_term;
+float rayleigh0_constant_term;
+float rayleigh1_width;
+float rayleigh1_exp_term;
+float rayleigh1_exp_scale;
+float rayleigh1_linear_term;
+float rayleigh1_constant_term;
+float mie0_width;
+float mie0_exp_term;
+float mie0_exp_scale;
+float mie0_linear_term;
+float mie0_constant_term;
+float mie1_width;
+float mie1_exp_term;
+float mie1_exp_scale;
+float mie1_linear_term;
+float mie1_constant_term;
+float absorption0_width;
+float absorption0_exp_term;
+float absorption0_exp_scale;
+float absorption0_linear_term;
+float absorption0_constant_term;
+float absorption1_width;
+float absorption1_exp_term;
+float absorption1_exp_scale;
+float absorption1_linear_term;
+float absorption1_constant_term;
+//// The solar irradiance at the top of the atmosphere.
+//IrradianceSpectrum solar_irradiance;
+//// The scattering coefficient of air molecules at the altitude where their
+//// density is maximum (usually the bottom of the atmosphere), as a function of
+//// wavelength. The scattering coefficient at altitude h is equal to
+//// 'rayleigh_scattering' times 'rayleigh_density' at this altitude.
+//ScatteringSpectrum rayleigh_scattering;
+//// The scattering coefficient of aerosols at the altitude where their density
+//// is maximum (usually the bottom of the atmosphere), as a function of
+//// wavelength. The scattering coefficient at altitude h is equal to
+//// 'mie_scattering' times 'mie_density' at this altitude.
+//ScatteringSpectrum mie_scattering;
+//// The extinction coefficient of aerosols at the altitude where their density
+//// is maximum (usually the bottom of the atmosphere), as a function of
+//// wavelength. The extinction coefficient at altitude h is equal to
+//// 'mie_extinction' times 'mie_density' at this altitude.
+//ScatteringSpectrum mie_extinction;
+//// The asymetry parameter for the Cornette-Shanks phase function for the
+//// aerosols.
+//Number mie_phase_function_g;
+//// The density profile of air molecules that absorb light (e.g. ozone), i.e.
+//// a function from altitude to dimensionless values between 0 (null density)
+//// and 1 (maximum density).
+//DensityProfile absorption_density;
+//// The extinction coefficient of molecules that absorb light (e.g. ozone) at
+//// the altitude where their density is maximum, as a function of wavelength.
+//// The extinction coefficient at altitude h is equal to
+//// 'absorption_extinction' times 'absorption_density' at this altitude.
+//ScatteringSpectrum absorption_extinction;
+//// The average albedo of the ground.
+//DimensionlessSpectrum ground_albedo;
+//// The cosine of the maximum Sun zenith angle for which atmospheric scattering
+//// must be precomputed (for maximum precision, use the smallest Sun zenith
+//// angle yielding negligible sky light radiance values. For instance, for the
+//// Earth case, 102 degrees is a good choice - yielding mu_s_min = -0.2).
+//Number mu_s_min;
+
+DensityProfileLayer SetDensityProfileLayer(float layerParams[5]) {
+	DensityProfileLayer layer;
+	layer.width = layerParams[0];
+	layer.exp_term = layerParams[1];
+	layer.exp_scale = layerParams[2];
+	layer.linear_term = layerParams[3];
+	layer.constant_term = layerParams[4];
+	return layer;
+}
 AtmosphereParameters InitAtmosphereParameters()
 {
 	AtmosphereParameters atmosphere;
 	atmosphere.solar_irradiance = IrradianceSpectrum(1.474, 1.8504, 1.91198);
-	atmosphere.sun_angular_radius = 0.00935 / 2.0;
-	atmosphere.bottom_radius = 6360.0;
-	atmosphere.top_radius = 6420.0;
-	//atmosphere.rayleigh_density = DensityProfile(DensityProfileLayer[2](DensityProfileLayer(0.0, 0.0, 0.0, 0.0, 0.0), DensityProfileLayer(0.0, 1.0, -0.125, 0.0, 0.0)));
-	atmosphere.rayleigh_density.layers[0] = SetDensityProfileLayer(0.0, 0.0, 0.0, 0.0, 0.0);
-	atmosphere.rayleigh_density.layers[1] = SetDensityProfileLayer(0.0, 1.0, -0.125, 0.0, 0.0);
+	atmosphere.sun_angular_radius = _SunAngularRadius;
+	atmosphere.bottom_radius = _BottomRadius;
+	atmosphere.top_radius = _TopRadius;
 
+	atmosphere.rayleigh_density.layers[0] = SetDensityProfileLayer(rayleigh0_width, rayleigh0_exp_term, rayleigh0_exp_scale, rayleigh0_linear_term, rayleigh0_constant_term);
+	atmosphere.rayleigh_density.layers[1] = SetDensityProfileLayer(rayleigh1_width, rayleigh1_exp_term, rayleigh1_exp_scale, rayleigh1_linear_term, rayleigh1_constant_term);
 	atmosphere.rayleigh_scattering = ScatteringSpectrum(0.005802, 0.013558, 0.0331);
-	//atmosphere.mie_density = DensityProfile(DensityProfileLayer[2](DensityProfileLayer(0.0, 0.0, 0.0, 0.0, 0.0), DensityProfileLayer(0.0, 1.0, -0.833333, 0.0, 0.0)));
-	atmosphere.mie_density.layers[0] = SetDensityProfileLayer(0.0, 0.0, 0.0, 0.0, 0.0);
-	atmosphere.mie_density.layers[1] = SetDensityProfileLayer(0.0, 1.0, -0.833333, 0.0, 0.0);
-
+	
+	atmosphere.mie_density.layers[0] = SetDensityProfileLayer(mie0_width, mie0_exp_term, mie0_exp_scale, mie0_linear_term, mie0_constant_term);
+	atmosphere.mie_density.layers[1] = SetDensityProfileLayer(mie1_width, mie1_exp_term, mie1_exp_scale, mie1_linear_term, mie1_constant_term);
 	atmosphere.mie_scattering = ScatteringSpectrum(0.003996, 00.003996, 0.003996);
 	atmosphere.mie_extinction = ScatteringSpectrum(0.00444, 0.00444, 0.00444);
-	atmosphere.mie_phase_function_g = 0.96;
-	//atmosphere.absorption_density = DensityProfile(DensityProfileLayer[2](DensityProfileLayer(25.0, 0.0, 0.0, 0.066667, -0.0666667), DensityProfileLayer(25.0, 0.0, 0.0, -0.066667, 2.666667)));
-	atmosphere.absorption_density.layers[0] = SetDensityProfileLayer(25.0, 0.0, 0.0, 0.066667, -0.666667);
-	atmosphere.absorption_density.layers[1] = SetDensityProfileLayer(25.0, 0.0, 0.0, -0.066667, 2.666667);
+	atmosphere.mie_phase_function_g = _MiePhaseFunctionG;
 
-	float kPi = 3.1415926;
-	atmosphere.absorption_extinction = ScatteringSpectrum(0.000650, 0.001881, 0.000085);
-	atmosphere.ground_albedo = ScatteringSpectrum(0.1, 0.1, 0.1);
-	atmosphere.mu_s_min = cos(120.0 / 180.0 * kPi);//-0.207912;
-												   //const double max_sun_zenith_angle =	(use_half_precision_ ? 102.0 : 120.0) / 180.0 * kPi;
-												   //constexpr double kSunAngularRadius = 0.00935 / 2.0;
+	atmosphere.absorption_density.layers[0] = SetDensityProfileLayer(absorption0_width, absorption0_exp_term, absorption0_exp_scale, absorption0_linear_term, absorption0_constant_term);
+	atmosphere.absorption_density.layers[1] = SetDensityProfileLayer(absorption1_width, absorption1_exp_term, absorption1_exp_scale, absorption1_linear_term, absorption1_constant_term);
+
+	atmosphere.absorption_extinction = _AbsorptionExtinction;
+	//atmosphere.absorption_extinction = ScatteringSpectrum(0.000650, 0.001881, 0.000085);
+	atmosphere.ground_albedo = _GroundAlbedo;// ScatteringSpectrum(0.1, 0.1, 0.1);
+	atmosphere.mu_s_min = cos(120.0 / 180.0 * PI);//-0.207912;
+												   
+												  
+												  //const double max_sun_zenith_angle =	(use_half_precision_ ? 102.0 : 120.0) / 180.0 * kPi;
+												   //atmosphere.sun_angular_radius = 0.00935 / 2.0;
+												   //atmosphere.bottom_radius = 6360.0;
+												   //atmosphere.top_radius = 6420.0;
+												   //atmosphere.rayleigh_density.layers[0] = SetDensityProfileLayer(0.0, 0.0, 0.0, 0.0, 0.0);
+												   //atmosphere.rayleigh_density.layers[1] = SetDensityProfileLayer(0.0, 1.0, -0.125, 0.0, 0.0);
+												   //atmosphere.mie_density.layers[0] = SetDensityProfileLayer(0.0, 0.0, 0.0, 0.0, 0.0);
+												   //atmosphere.mie_density.layers[1] = SetDensityProfileLayer(0.0, 1.0, -0.833333, 0.0, 0.0);
+	//atmosphere.absorption_density.layers[0] = SetDensityProfileLayer(25.0, 0.0, 0.0, 0.066667, -0.666667);
+	//atmosphere.absorption_density.layers[1] = SetDensityProfileLayer(25.0, 0.0, 0.0, -0.066667, 2.666667);
+	//atmosphere.mie_phase_function_g = 0.96;
 
 	return atmosphere;
 	//struct AtmosphereParameters {
 	//	IrradianceSpectrum solar_irradiance;
-	//	Angle sun_angular_radius;
-	//	Length bottom_radius;
-	//	Length top_radius;
 	//	DensityProfile rayleigh_density;
 	//	ScatteringSpectrum rayleigh_scattering;
 	//	DensityProfile mie_density;

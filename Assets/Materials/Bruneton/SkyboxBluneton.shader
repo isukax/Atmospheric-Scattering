@@ -49,6 +49,27 @@
 			#endif
 			#endif
 
+		static const float3 kSphereCenter = float3(0.0, 1.0, 0.0);
+	static const float kSphereRadius = 1.0;
+	static const float3 kSphereAlbedo = float3(0.8, 0.8, 0.8);
+	static const float3 kGroundAlbedo = float3(0.0, 0.0, 0.04);
+
+	float3 white_point;
+	float3 earth_center;
+	float3 sun_direction;
+	float2 sun_size;
+	float depth_test;
+
+	float sun_angular_radius;
+	float3 SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+	float3 SUN_SPECTRAL_RADIANCE_TO_LUMINANCE;
+
+		sampler2D transmittance_texture;
+	sampler2D irradiance_texture;
+	sampler3D delta_scattering_density_texture;
+	sampler3D scattering_texture;
+	sampler3D single_mie_scattering_texture;
+
 			sampler2D _TransmittanceTex;
 			sampler3D _ScatteringTex;
 			sampler3D _MieScatteringTex;
@@ -239,6 +260,130 @@
 				return mul((float3x3)_InverseView, cameraRay.xyz);
 			}
 
+			/*
+			The functions to compute shadows and light shafts must be defined before we
+			can use them in the main shader function, so we define them first. Testing if
+			a point is in the shadow of the sphere S is equivalent to test if the
+			corresponding light ray intersects the sphere, which is very simple to do.
+			However, this is only valid for a punctual light source, which is not the case
+			of the Sun. In the following function we compute an approximate (and biased)
+			soft shadow by taking the angular size of the Sun into account:
+			*/
+			float GetSunVisibility(float3 _point, float3 sun_direction)
+			{
+				float3 p = _point - kSphereCenter;
+				float p_dot_v = dot(p, sun_direction);
+				float p_dot_p = dot(p, p);
+				float ray_sphere_center_squared_distance = p_dot_p - p_dot_v * p_dot_v;
+				float distance_to_intersection = -p_dot_v - sqrt(max(0.0, kSphereRadius * kSphereRadius - ray_sphere_center_squared_distance));
+
+				if (distance_to_intersection > 0.0)
+				{
+					// Compute the distance between the view ray and the sphere, and the
+					// corresponding (tangent of the) subtended angle. Finally, use this to
+					// compute an approximate sun visibility.
+					float ray_sphere_distance = kSphereRadius - sqrt(ray_sphere_center_squared_distance);
+					float ray_sphere_angular_distance = -ray_sphere_distance / p_dot_v;
+
+					return smoothstep(1.0, 0.0, ray_sphere_angular_distance / sun_size.x);
+				}
+
+				return 1.0;
+			}
+
+			/*
+			The sphere also partially occludes the sky light, and we approximate this
+			effect with an ambient occlusion factor. The ambient occlusion factor due to a
+			sphere is given in <a href=
+			"http://webserver.dmt.upm.es/~isidoro/tc3/Radiation%20View%20factors.pdf"
+			>Radiation View Factors</a> (Isidoro Martinez, 1995). In the simple case where
+			the sphere is fully visible, it is given by the following function:
+			*/
+			float GetSkyVisibility(float3 _point)
+			{
+				float3 p = _point - kSphereCenter;
+				float p_dot_p = dot(p, p);
+				return 1.0 + p.y / sqrt(p_dot_p) * kSphereRadius * kSphereRadius / p_dot_p;
+			}
+
+			/*
+			To compute light shafts we need the intersections of the view ray with the
+			shadow volume of the sphere S. Since the Sun is not a punctual light source this
+			shadow volume is not a cylinder but a cone (for the umbra, plus another cone for
+			the penumbra, but we ignore it here):
+			*/
+			void GetSphereShadowInOut(float3 view_direction, float3 sun_direction, out float d_in, out float d_out)
+			{
+				float3 camera = _WorldSpaceCameraPos;
+				float3 pos = camera - kSphereCenter;
+				float pos_dot_sun = dot(pos, sun_direction);
+				float view_dot_sun = dot(view_direction, sun_direction);
+				float k = sun_size.x;
+				float l = 1.0 + k * k;
+				float a = 1.0 - l * view_dot_sun * view_dot_sun;
+				float b = dot(pos, view_direction) - l * pos_dot_sun * view_dot_sun -
+					k * kSphereRadius * view_dot_sun;
+				float c = dot(pos, pos) - l * pos_dot_sun * pos_dot_sun -
+					2.0 * k * kSphereRadius * pos_dot_sun - kSphereRadius * kSphereRadius;
+				float discriminant = b * b - a * c;
+				if (discriminant > 0.0)
+				{
+					d_in = max(0.0, (-b - sqrt(discriminant)) / a);
+					d_out = (-b + sqrt(discriminant)) / a;
+					// The values of d for which delta is equal to 0 and kSphereRadius / k.
+					float d_base = -pos_dot_sun / view_dot_sun;
+					float d_apex = -(pos_dot_sun + kSphereRadius / k) / view_dot_sun;
+
+					if (view_dot_sun > 0.0)
+					{
+						d_in = max(d_in, d_apex);
+						d_out = a > 0.0 ? min(d_out, d_base) : d_base;
+					}
+					else
+					{
+						d_in = a > 0.0 ? max(d_in, d_base) : d_base;
+						d_out = min(d_out, d_apex);
+					}
+				}
+				else
+				{
+					d_in = 0.0;
+					d_out = 0.0;
+				}
+			}
+
+			RadianceSpectrum GetSolarRadiance(AtmosphereParameters atmosphere)
+			{
+				return atmosphere.solar_irradiance / (PI * sun_angular_radius * sun_angular_radius);
+			}
+
+			RadianceSpectrum GetSkyRadiance(AtmosphereParameters atmosphere,
+				Position camera, Direction view_ray, Length shadow_length,
+				Direction sun_direction, out DimensionlessSpectrum transmittance)
+			{
+				return GetSkyRadiance(atmosphere, transmittance_texture,
+					scattering_texture, single_mie_scattering_texture,
+					camera, view_ray, shadow_length, sun_direction, transmittance);
+			}
+
+			RadianceSpectrum GetSkyRadianceToPoint(AtmosphereParameters atmosphere,
+				Position camera, Position _point, Length shadow_length,
+				Direction sun_direction, out DimensionlessSpectrum transmittance)
+			{
+				return GetSkyRadianceToPoint(atmosphere, transmittance_texture,
+					scattering_texture, single_mie_scattering_texture,
+					camera, _point, shadow_length, sun_direction, transmittance);
+			}
+
+			IrradianceSpectrum GetSunAndSkyIrradiance(AtmosphereParameters atmosphere,
+				Position p, Direction normal, Direction sun_direction,
+				out IrradianceSpectrum sky_irradiance)
+			{
+				return GetSunAndSkyIrradiance(atmosphere, transmittance_texture,
+					irradiance_texture, p, normal, sun_direction, sky_irradiance);
+			}
+
+#if 0
 			float4 frag(VSOutput input) : SV_Target0
 			{
 				//return tex2D(_TransmittanceTex, input.uv);
@@ -301,6 +446,87 @@
 //				return 1;
 			}
 
+#else
+			fixed4 frag(VSOutput i) : SV_Target
+			{
+				//return float4(1, 0, 0, 1);
+			//return tex3D(delta_scattering_density_texture, float3(i.uv, depth_test));
+			//return tex2D(transmittance_texture, i.uv);
+			//return tex2D(irradiance_texture, i.uv);
+			//return tex3D(scattering_texture, float3(i.uv, depth_test));
+			//return tex3D(single_mie_scattering_texture, float3(i.uv, depth_test));
+			AtmosphereParameters atmosphere = InitAtmosphereParameters();
+
+			float3 camera = _WorldSpaceCameraPos;
+			float3 view_direction = normalize(i.worldPos);
+			//float3 view_direction = normalize(i.view_ray);
+
+			float shadow_in = 0;
+			float shadow_out = 0;
+			//GetSphereShadowInOut(view_direction, sun_direction, shadow_in, shadow_out);
+
+			// Hack to fade out light shafts when the Sun is very close to the horizon.
+			float lightshaft_fadein_hack = smoothstep(
+				0.02, 0.04, dot(normalize(camera - earth_center), sun_direction));
+
+			// Compute the distance between the view ray line and the Earth center,
+			// and the distance between the camera and the intersection of the view
+			// ray with the ground (or NaN if there is no intersection).
+			float3 p = camera - earth_center;
+			float p_dot_v = dot(p, view_direction);
+			float p_dot_p = dot(p, p);
+			float ray_earth_center_squared_distance = p_dot_p - p_dot_v * p_dot_v;
+			float distance_to_intersection = -p_dot_v - sqrt(earth_center.y * earth_center.y - ray_earth_center_squared_distance);
+			// Compute the radiance reflected by the ground, if the ray intersects it.
+			float ground_alpha = 0.0;
+			float3 ground_radiance = float3(0, 0, 0);
+			//if (distance_to_intersection > 0.0)
+			//{
+			//	float3 _point = camera + view_direction * distance_to_intersection;
+			//	float3 normal = normalize(_point - earth_center);
+
+			//	// Compute the radiance reflected by the ground.
+			//	float3 sky_irradiance;
+			//	float3 sun_irradiance = GetSunAndSkyIrradiance(atmosphere, _point - earth_center, normal, sun_direction, sky_irradiance);
+
+			//	float sunVis = GetSunVisibility(_point, sun_direction);
+			//	float skyVis = GetSkyVisibility(_point);
+
+			//	ground_radiance = kGroundAlbedo * (1.0 / PI) * (sun_irradiance * sunVis + sky_irradiance * skyVis);
+
+			//	float shadow_length = 0;// max(0.0, min(shadow_out, distance_to_intersection) - shadow_in) * lightshaft_fadein_hack;
+
+			//	float3 transmittance;
+			//	float3 in_scatter = GetSkyRadianceToPoint(atmosphere, camera - earth_center, _point - earth_center, shadow_length, sun_direction, transmittance);
+
+			//	ground_radiance = ground_radiance * transmittance + in_scatter;
+			//	ground_alpha = 1.0;
+			//}
+
+			/*
+			Finally, we compute the radiance and transmittance of the sky, and composite
+			together, from back to front, the radiance and opacities of all the objects of
+			the scene:
+			*/
+
+			// Compute the radiance of the sky.
+			float shadow_length = 0;// max(0.0, shadow_out - shadow_in) * lightshaft_fadein_hack;
+			float3 transmittance;
+			float3 radiance = GetSkyRadiance(atmosphere, camera - earth_center, view_direction, shadow_length, sun_direction, transmittance);
+
+			// If the view ray intersects the Sun, add the Sun radiance.
+			if (dot(view_direction, sun_direction) > sun_size.y)
+			{
+				radiance = radiance + transmittance * GetSolarRadiance(atmosphere);
+			}
+
+			radiance = lerp(radiance, ground_radiance, ground_alpha);
+
+			radiance = pow(float3(1,1,1) - exp(-radiance / white_point * _Exposure), 1.0 / 2.2);
+
+			return float4(radiance, 1);
+			}
+#endif
 
 			ENDCG
 		}

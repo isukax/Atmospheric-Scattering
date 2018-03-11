@@ -5,10 +5,38 @@ using UnityEngine;
 namespace Bruneton {
     public class Render : MonoBehaviour {
 
-        const int READ = 0;
-        const int WRITE = 1;
+        [Header("Atmosphere Parameters")]
+        public bool m_IsUseOzone;
+        public bool m_IsHalfPrecision;
+        public bool m_IsValidGroudIrradiance;
 
+        [SerializeField]
+        Color m_GroundAlbedo;
+
+        [SerializeField, Range(1, 10)]
+        uint m_ScatteringOrder = 2;
+
+        [SerializeField, Range(-1, 1)]
+        float m_MiePhaseFunctionG = 0.96f;
+
+        [SerializeField, Range(0, 0.1f)]
+        float m_SunAngularRadius = 0.00935f / 2.0f;
+
+        float kBottomRadius = 6360000.0f;
+        float kTopRadius = 6420000.0f;
+        float kLengthUnitInMeters = 1000;
+        float kScaleHeightRayleigh = 8000;
+        float kScaleHeightMie = 1200;
+
+        [SerializeField, Range(0, 1)]
+        float m_DepthTest = 0;
+
+        static readonly int READ = 0;
+        static readonly int WRITE = 1;
+
+        public Light m_Sun;
         public Material m_PreComputeTransmittance;
+        public ComputeShader m_ComputeShader;
 
         public RenderTexture m_TransmittanceTexture;
 
@@ -19,22 +47,8 @@ namespace Bruneton {
         public RenderTexture m_SingleRayleighScatteringTexture;
         public RenderTexture m_SingleMieScatteringTexture;
         public RenderTexture m_ScatteringDensityTexture;
-        public RenderTexture m_MultipleScatteringTexture;
         public RenderTexture m_DeltaMultipleScatteringTexture;
 
-        public ComputeShader m_ComputeShader;
-
-        public float m_DepthTest = 0;
-        public int m_ScatteringOrder = 2;
-        public Renderer m_modelRenderer;
-
-        void Swap(ref RenderTexture[] texture) {
-            RenderTexture temp = texture[READ];
-            texture[READ] = texture[WRITE];
-            texture[WRITE] = temp;
-        }
-
-        // Use this for initialization
         void Start() {
             m_IrradianceTexture = new RenderTexture[2];
             m_ScatteringTexture = new RenderTexture[2];
@@ -104,17 +118,6 @@ namespace Bruneton {
             }
 
             {
-                m_MultipleScatteringTexture = new RenderTexture(Constants.SCATTERING_TEXTURE_WIDTH, Constants.SCATTERING_TEXTURE_HEIGHT, 0, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
-                m_MultipleScatteringTexture.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
-                m_MultipleScatteringTexture.enableRandomWrite = true;
-                m_MultipleScatteringTexture.wrapMode = TextureWrapMode.Clamp;
-                m_MultipleScatteringTexture.useMipMap = false;
-                m_MultipleScatteringTexture.filterMode = FilterMode.Bilinear;
-                m_MultipleScatteringTexture.volumeDepth = Constants.SCATTERING_TEXTURE_DEPTH;
-                m_MultipleScatteringTexture.Create();
-            }
-
-            {
                 m_DeltaMultipleScatteringTexture = new RenderTexture(Constants.SCATTERING_TEXTURE_WIDTH, Constants.SCATTERING_TEXTURE_HEIGHT, 0, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
                 m_DeltaMultipleScatteringTexture.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
                 m_DeltaMultipleScatteringTexture.enableRandomWrite = true;
@@ -139,34 +142,110 @@ namespace Bruneton {
             if(m_PreComputeTransmittance == null) m_PreComputeTransmittance = new Material(Shader.Find("Bruneton/PrecomputeTransmittance"));
         }
 
-        // Update is called once per frame
-        void UpdateMaterialParams() {
-            //m_PreComputeTransmittance.SetFloat();
-            //m_PreComputeTransmittance.
-    //            const AtmosphereParameters ATMOSPHERE = AtmosphereParameters(
-    //to_string(solar_irradiance, lambdas, 1.0),
-    //std::to_string(sun_angular_radius),
-    //std::to_string(bottom_radius / length_unit_in_meters),
-    //std::to_string(top_radius / length_unit_in_meters),
-    //density_profile(rayleigh_density),
-    //to_string(
-    //    rayleigh_scattering, lambdas, length_unit_in_meters),
-    //density_profile(mie_density),
-    //to_string(mie_scattering, lambdas, length_unit_in_meters),
-    //to_string(mie_extinction, lambdas, length_unit_in_meters),
-    //std::to_string(mie_phase_function_g),
-    //density_profile(absorption_density),
-    //to_string(
-    //    absorption_extinction, lambdas, length_unit_in_meters),
-    //to_string(ground_albedo, lambdas, 1.0),
-    //std::to_string(cos(max_sun_zenith_angle)));
-    //    }
+
+        void UpdateMaterialParams(Material mat) {
+            Vector3 skySpectralRadianceToLuminance = new Vector3(114974.914f, 71305.95f, 65310.5469f);
+            Vector3 sunSpectralRadianceToLuminance = new Vector3(98242.79f, 69954.4f, 66475.0156f);
+            mat.SetMatrix("_InverseProjection", Camera.main.projectionMatrix.inverse);
+            mat.SetMatrix("_InverseView", Camera.main.cameraToWorldMatrix.inverse);
+            mat.SetVector("SKY_SPECTRAL_RADIANCE_TO_LUMINANCE", skySpectralRadianceToLuminance);
+            mat.SetVector("SUN_SPECTRAL_RADIANCE_TO_LUMINANCE", sunSpectralRadianceToLuminance);
+            mat.SetColor("_GroundAlbedo", m_GroundAlbedo);
+            if(m_IsUseOzone) {
+                mat.SetVector("_AbsorptionExtinction", new Vector4(0.000650f, 0.001881f, 0.000085f, 0));
+            } else {
+                mat.SetVector("_AbsorptionExtinction", Vector4.zero);
+            }
+            mat.SetFloat("_MiePhaseFunctionG", m_MiePhaseFunctionG);
+            mat.SetFloat("_TopRadius", kTopRadius / kLengthUnitInMeters);
+            mat.SetFloat("_BottomRadius", kBottomRadius / kLengthUnitInMeters);
+            mat.SetFloat("_SunAngularRadius", m_SunAngularRadius);
+            //mat.SetFloat("exposure", UseLuminance != LUMINANCE.NONE ? Exposure * 1e-5f : Exposure);
+            mat.SetVector("earth_center", new Vector3(0.0f, -kBottomRadius / kLengthUnitInMeters, 0.0f));
+            mat.SetVector("sun_size", new Vector2(Mathf.Tan(m_SunAngularRadius), Mathf.Cos(m_SunAngularRadius)));
+            mat.SetVector("sun_direction", m_Sun.transform.forward * -1.0f);
+
+            UpdateDensityLayer(new List<float>() { 0, 0, 0, 0, 0 }, (name, num) => {
+                mat.SetFloat("rayleigh0_" + name, num);
+            });
+            UpdateDensityLayer(new List<float>() { 0, 1, -1.0f / kScaleHeightRayleigh * kLengthUnitInMeters, 0, 0 }, (name, num) => {
+                mat.SetFloat("rayleigh1_" + name, num);
+            });
+            UpdateDensityLayer(new List<float>() { 0, 0, 0, 0, 0 }, (name, num) => {
+                mat.SetFloat("mie0_" + name, num);
+            });
+            UpdateDensityLayer(new List<float>() { 0, 1, -1.0f / kScaleHeightMie * kLengthUnitInMeters, 0, 0 }, (name, num) => {
+                mat.SetFloat("mie1_" + name, num);
+            });
+            UpdateDensityLayer(new List<float>() { 25, 0, 0, 0.066667f, -0.666667f }, (name, num) => {
+                mat.SetFloat("absorption0_" + name, num);
+            });
+            UpdateDensityLayer(new List<float>() { 25, 0, 0, -0.066667f, 2.666667f }, (name, num) => {
+                mat.SetFloat("absorption1_" + name, num);
+            });
+            double white_point_r = 1.0;
+            double white_point_g = 1.0;
+            double white_point_b = 1.0;
+            //if(DoWhiteBalance) {
+            //    m_model.ConvertSpectrumToLinearSrgb(out white_point_r, out white_point_g, out white_point_b);
+
+            //    double white_point = (white_point_r + white_point_g + white_point_b) / 3.0;
+            //    white_point_r /= white_point;
+            //    white_point_g /= white_point;
+            //    white_point_b /= white_point;
+            //}
+
+            mat.SetVector("white_point", new Vector3((float)white_point_r, (float)white_point_g, (float)white_point_b));
+
+        }
+
+        void Swap(ref RenderTexture[] texture) {
+            RenderTexture temp = texture[READ];
+            texture[READ] = texture[WRITE];
+            texture[WRITE] = temp;
+        }
+
+        void UpdateDensityLayer(List<float> layer, UnityEngine.Events.UnityAction<string, float> action) {
+            int length = 5;
+            string[] paramName = {"width", "exp_term", "exp_scale", "linear_term", "constant_term" };
+            for(int i = 0; i < length; ++i) {
+                //mat.SetFloat(paramName[i], layer[i]);
+                action(paramName[i], layer[i]);
+            }
         }
 
         void Update() {
             if(Input.GetKeyDown(KeyCode.Space) && m_ComputeShader != null) {
                 Debug.Log("dispatch");
                 Start();
+                if(m_IsUseOzone) {
+                    m_ComputeShader.SetVector("_AbsorptionExtinction", new Vector4(0.000650f, 0.001881f, 0.000085f, 0));
+                } else {
+                    m_ComputeShader.SetVector("_AbsorptionExtinction", Vector4.zero);
+                }
+                m_ComputeShader.SetVector("_GroundAlbedo", m_GroundAlbedo);
+                m_ComputeShader.SetFloat("_MiePhaseFunctionG", m_MiePhaseFunctionG);
+                m_ComputeShader.SetFloat("_TopRadius", kTopRadius / kLengthUnitInMeters);
+                m_ComputeShader.SetFloat("_BottomRadius", kBottomRadius / kLengthUnitInMeters);
+                m_ComputeShader.SetFloat("_SunAngularRadius", m_SunAngularRadius);
+                UpdateDensityLayer(new List<float>() { 0, 0, 0, 0, 0 }, (name, num) => {
+                    m_ComputeShader.SetFloat("rayleigh0_" + name, num);
+                });
+                UpdateDensityLayer(new List<float>() { 0, 1, -1.0f / kScaleHeightRayleigh * kLengthUnitInMeters, 0, 0 }, (name, num) => {
+                    m_ComputeShader.SetFloat("rayleigh1_" + name, num);
+                });
+                UpdateDensityLayer(new List<float>() { 0, 0, 0, 0, 0 }, (name, num) => {
+                    m_ComputeShader.SetFloat("mie0_" + name, num);
+                });
+                UpdateDensityLayer(new List<float>() { 0, 1, -1.0f / kScaleHeightMie * kLengthUnitInMeters, 0, 0 }, (name, num) => {
+                    m_ComputeShader.SetFloat("mie1_" + name, num);
+                });
+                UpdateDensityLayer(new List<float>() { 25, 0, 0, 0.066667f, -0.666667f }, (name, num) => {
+                    m_ComputeShader.SetFloat("absorption0_" + name, num);
+                });
+                UpdateDensityLayer(new List<float>() { 25, 0, 0, -0.066667f, 2.666667f }, (name, num) => {
+                    m_ComputeShader.SetFloat("absorption1_" + name, num);
+                });
 
                 // 透過率
                 var kernel = m_ComputeShader.FindKernel("Transmittance");
@@ -248,13 +327,8 @@ namespace Bruneton {
                 m_PreComputeTransmittance.SetTexture("_SingleRayleighScatteringTex", m_SingleRayleighScatteringTexture);
                 m_PreComputeTransmittance.SetTexture("_SingleMieScatteringTex", m_SingleMieScatteringTexture);
                 m_PreComputeTransmittance.SetTexture("_ScatteringDensityTex", m_ScatteringDensityTexture);
-                m_PreComputeTransmittance.SetTexture("_MultipleScatteringTex", m_MultipleScatteringTexture);
                 m_PreComputeTransmittance.SetTexture("_DeltaMultipleScatteringTex", m_DeltaMultipleScatteringTexture);
                 m_PreComputeTransmittance.SetFloat("_DepthTest", m_DepthTest);
-
-                
-                m_modelRenderer.material.SetTexture("_TransmittanceTex", m_TransmittanceTexture);
-                m_modelRenderer.material.SetTexture("_ScatteringTex", m_SingleRayleighScatteringTexture);
 
                 RenderSettings.skybox.SetTexture("_TransmittanceTex", m_TransmittanceTexture);
                 RenderSettings.skybox.SetTexture("_ScatteringTex", m_SingleRayleighScatteringTexture);
@@ -264,17 +338,26 @@ namespace Bruneton {
                 RenderSettings.skybox.SetMatrix("_InverseProjection", Camera.main.projectionMatrix.inverse);
                 RenderSettings.skybox.SetMatrix("_InverseView", Camera.main.cameraToWorldMatrix);
 
+                RenderSettings.skybox.SetTexture("transmittance_texture", m_TransmittanceTexture);
+                RenderSettings.skybox.SetTexture("_DeltaIrradianceTex", m_DeltaIrradianceTexture);
+                RenderSettings.skybox.SetTexture("irradiance_texture", m_IrradianceTexture[READ]);
+                RenderSettings.skybox.SetTexture("scattering_texture", m_ScatteringTexture[READ]);
+                RenderSettings.skybox.SetTexture("_SingleRayleighScatteringTex", m_SingleRayleighScatteringTexture);
+                RenderSettings.skybox.SetTexture("single_mie_scattering_texture", m_SingleMieScatteringTexture);
+                RenderSettings.skybox.SetTexture("_ScatteringDensityTex", m_ScatteringDensityTexture);
+                RenderSettings.skybox.SetTexture("_DeltaMultipleScatteringTex", m_DeltaMultipleScatteringTexture);
+                RenderSettings.skybox.SetFloat("_DepthTest", m_DepthTest);
             }
             m_PreComputeTransmittance.SetFloat("_DepthTest", m_DepthTest);
-            m_modelRenderer.material.SetFloat("_DepthTest", m_DepthTest);
+            UpdateMaterialParams(m_PreComputeTransmittance);
+            UpdateMaterialParams(RenderSettings.skybox);
         }
 
-        void OnRenderImage(RenderTexture src, RenderTexture dest) {
-            UpdateMaterialParams();
-            Graphics.Blit(src, dest, m_PreComputeTransmittance);
-            //Graphics.Blit(src, dest);
-            //Graphics.Blit(null, m_TransmittanceTexture, m_PreComputeTransmittance);
-            //Graphics.Blit(m_TransmittanceTexture, dest);
-        }
+        //void OnRenderImage(RenderTexture src, RenderTexture dest) {
+        //    Graphics.Blit(src, dest, m_PreComputeTransmittance);
+        //    //Graphics.Blit(src, dest);
+        //    //Graphics.Blit(null, m_TransmittanceTexture, m_PreComputeTransmittance);
+        //    //Graphics.Blit(m_TransmittanceTexture, dest);
+        //}
     }
 }
